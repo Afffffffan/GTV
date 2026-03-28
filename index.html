@@ -3,88 +3,253 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Three.js Drift Game</title>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #3d3d3d;
-        }
-        canvas {
-            display: block;
-        }
-        .score {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: white;
-            font-size: 24px;
-        }
-    </style>
+    <title>GTV - Grand Theft Vehicle</title>
+    <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
-<div class="score">Score: <span id="score">0</span></div>
+<div id="hud">
+    <div id="total-score">SCORE: <span id="score-val">0</span> &nbsp;<span id="multiplier"></span></div>
+    <div id="wanted">
+        <span class="star" id="s1">★</span><span class="star" id="s2">★</span>
+        <span class="star" id="s3">★</span><span class="star" id="s4">★</span><span class="star" id="s5">★</span>
+    </div>
+    <div id="speedometer">
+        <div id="speed-value">0</div>
+        <div id="speed-label">KM/H</div>
+    </div>
+    <div id="drift-meter">
+        <div id="drift-label">DRIFT</div>
+        <div id="drift-bar-bg"><div id="drift-bar"></div></div>
+        <div id="drift-score">+0</div>
+    </div>
+    <div id="mission-box" style="display:none">
+        <div id="mission-title">MISSION</div>
+        <div id="mission-desc"></div>
+        <div id="mission-progress-bg"><div id="mission-progress-bar"></div></div>
+    </div>
+    <div id="mission-alert"></div>
+    <div id="drift-combo"></div>
+    <div id="controls-hint">W/S — GAS/BRAKE &nbsp;|&nbsp; A/D — STEER &nbsp;|&nbsp; SPACE — HANDBRAKE &nbsp;|&nbsp; M — MISSION</div>
+</div>
 <canvas id="gameCanvas"></canvas>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/game-state.js"></script>
+<script src="js/police-ai.js"></script>
+<script src="js/missions.js"></script>
 <script>
-    const canvas = document.getElementById('gameCanvas');
-    const scoreDisplay = document.getElementById('score');
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer({canvas});
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+// ─── SCENE ─────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+scene.fog = new THREE.Fog(0x1a1a2e, 60, 200);
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.1, 500);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+window.addEventListener('resize', () => {
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+});
 
-    // Track User
-    const trackGeometry = new THREE.PlaneGeometry(1000, 1000);
-    const trackMaterial = new THREE.MeshBasicMaterial({color: 0x7b7b7b});
-    const track = new THREE.Mesh(trackGeometry, trackMaterial);
-    track.rotation.x = - Math.PI / 2;
-    scene.add(track);
+// ─── LIGHTING ──────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x404060, 0.8));
+const moon = new THREE.DirectionalLight(0x8888ff, 0.5);
+moon.position.set(50,100,50); moon.castShadow = true;
+moon.shadow.mapSize.width = moon.shadow.mapSize.height = 2048;
+moon.shadow.camera.left = moon.shadow.camera.bottom = -100;
+moon.shadow.camera.right = moon.shadow.camera.top = 100;
+scene.add(moon);
 
-    // Car
-    const carGeometry = new THREE.BoxGeometry(1, 0.5, 2);
-    const carMaterial = new THREE.MeshBasicMaterial({color: 0xff0000});
-    const car = new THREE.Mesh(carGeometry, carMaterial);
-    car.position.y = 0.5;
-    scene.add(car);
+// ─── CITY ──────────────────────────────────────────────────────────────────────
+function mat(color) { return new THREE.MeshLambertMaterial({ color }); }
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff);
-    scene.add(ambientLight);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(400,400), mat(0x1c1c1c));
+ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
 
-    camera.position.z = 5;
-
-    let score = 0;
-    let driftScore = 0;
-
-    // Game Loop
-    function animate() {
-        requestAnimationFrame(animate);
-        // Add game logic here (moving car, detecting drift, etc.)
-        car.rotation.y += 0.01;
-        score += driftScore;
-        scoreDisplay.innerText = score;
-        renderer.render(scene, camera);
+function road(x,z,w,h) {
+    const r = new THREE.Mesh(new THREE.PlaneGeometry(w,h), mat(0x2a2a2a));
+    r.rotation.x = -Math.PI/2; r.position.set(x,0.01,z); r.receiveShadow = true; scene.add(r);
+    const n = Math.floor(Math.max(w,h)/8);
+    for(let i=0;i<n;i++){
+        const d = new THREE.Mesh(new THREE.PlaneGeometry(w>h?3:0.3, w>h?0.3:3), mat(0xffff00));
+        d.rotation.x = -Math.PI/2;
+        const off = -Math.max(w,h)/2 + i*8 + 4;
+        d.position.set(x+(w>h?off:0), 0.02, z+(w>h?0:off)); scene.add(d);
     }
+}
+road(0,0,300,14); road(0,0,14,300); road(0,60,300,12); road(0,-60,300,12);
+road(80,0,12,300); road(-80,0,12,300);
 
-    // Controls
-    document.addEventListener('keydown', (event) => {
-        if(event.key === 'ArrowUp') {
-            car.position.z -= 0.1;
+const bColors = [0x2d3561,0x1a1a2e,0x16213e,0x0f3460,0x533483,0x1b1b2f];
+function building(x,z,w,d,h,ci=0){
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat(bColors[ci%bColors.length]));
+    m.position.set(x,h/2,z); m.castShadow=true; scene.add(m);
+    const wRows=Math.floor(h/4), wCols=Math.floor(w/4);
+    for(let r=0;r<wRows;r++) for(let c=0;c<wCols;c++) if(Math.random()>0.4){
+        const win=new THREE.Mesh(new THREE.PlaneGeometry(1.2,1.8),
+            new THREE.MeshBasicMaterial({color:Math.random()>0.3?0xffffaa:0x223366}));
+        win.position.set(x-w/2+2+c*4, 2+r*4, z+d/2+0.01); scene.add(win);
+    }
+}
+[[30,30,18,18,30,0],[55,30,14,18,22,1],[30,55,18,14,18,2],[55,55,14,14,40,3],
+ [-30,30,18,18,25,4],[-55,30,14,18,35,0],[-30,55,18,14,20,1],[-55,55,14,14,28,2],
+ [30,-30,18,18,22,3],[55,-30,14,18,32,4],[30,-55,18,14,18,0],[55,-55,14,14,25,1],
+ [-30,-30,18,18,30,2],[-55,-30,14,18,20,3],[-30,-55,18,14,36,4],[-55,-55,14,14,22,0],
+ [110,30,16,20,24,1],[140,30,20,16,38,2],[110,-30,16,20,20,3],[140,-30,20,16,28,4],
+ [-110,30,16,20,32,0],[-140,30,20,16,22,1],[-110,-30,16,20,26,2],[-140,-30,20,16,40,3]
+].forEach(b=>building(...b));
+
+function streetlight(x,z){
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,6), mat(0x555555));
+    pole.position.set(x,3,z); scene.add(pole);
+    const bulb=new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color:0xffeeaa}));
+    bulb.position.set(x+2,6,z); scene.add(bulb);
+    const pl=new THREE.PointLight(0xffeeaa,0.8,20); pl.position.set(x+2,6,z); scene.add(pl);
+}
+for(let i=-120;i<=120;i+=20){
+    streetlight(i,8); streetlight(i,-8); streetlight(8,i); streetlight(-8,i);
+}
+
+// ─── PLAYER CAR ────────────────────────────────────────────────────────────────
+const carGroup = new THREE.Group(); scene.add(carGroup);
+const carBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.6,4.4), mat(0xff2244));
+carBody.position.y=0.5; carBody.castShadow=true; carGroup.add(carBody);
+const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.55,2.2), mat(0xcc1133));
+cabin.position.set(0,1.05,-0.3); carGroup.add(cabin);
+const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6,0.5),
+    new THREE.MeshBasicMaterial({color:0x88ccff,side:THREE.DoubleSide,transparent:true,opacity:0.6}));
+glass.position.set(0,1.1,0.8); glass.rotation.x=-0.3; carGroup.add(glass);
+[[-0.7,2.25,0xffffff],[0.7,2.25,0xffffff],[-0.7,-2.25,0xff2200],[0.7,-2.25,0xff2200]].forEach(([lx,lz,lc])=>{
+    const l=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.2,0.1),new THREE.MeshBasicMaterial({color:lc}));
+    l.position.set(lx,0.5,lz); carGroup.add(l);
+    const pl=new THREE.PointLight(lc,1.5,15); pl.position.set(lx,0.5,lz); carGroup.add(pl);
+});
+const wGeo=new THREE.CylinderGeometry(0.35,0.35,0.3,16), wMat=mat(0x111111);
+const wheels=[[-1.1,0.35,1.4],[1.1,0.35,1.4],[-1.1,0.35,-1.4],[1.1,0.35,-1.4]].map(([wx,wy,wz])=>{
+    const w=new THREE.Mesh(wGeo,wMat); w.rotation.z=Math.PI/2; w.position.set(wx,wy,wz); carGroup.add(w); return w;
+});
+
+// ─── SYSTEMS ───────────────────────────────────────────────────────────────────
+const physics = new CarPhysics();
+const gameState = new GameState();
+const policeSystem = new PoliceAISystem(scene, THREE);
+const missionSystem = new MissionSystem();
+
+// ─── EVENTS ────────────────────────────────────────────────────────────────────
+gameState.on('driftEnd', ({earned, combo, multiplier}) => {
+    showAlert('+' + earned + (multiplier > 1 ? ' x'+multiplier+'!' : ''), '#ff6a00');
+});
+gameState.on('missionStart', (m) => {
+    document.getElementById('mission-box').style.display = 'block';
+    document.getElementById('mission-title').textContent = m.name.toUpperCase();
+    document.getElementById('mission-desc').textContent = m.description;
+    showAlert('MISSION: ' + m.name, '#00ffe7');
+});
+gameState.on('missionComplete', (m) => {
+    showAlert('✓ MISSION COMPLETE! +' + m.goal.reward, '#00ff88');
+    setTimeout(() => {
+        missionSystem.advance();
+        document.getElementById('mission-box').style.display='none';
+    }, 3000);
+});
+gameState.on('missionFailed', (m) => {
+    showAlert('✗ MISSION FAILED', '#ff0000');
+    setTimeout(() => { document.getElementById('mission-box').style.display='none'; }, 2000);
+});
+
+// ─── CONTROLS ──────────────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (e.key === 'm' || e.key === 'M') {
+        if (!gameState.activeMission || gameState.activeMission.completed || gameState.activeMission.failed) {
+            missionSystem.startNext(gameState);
         }
-        if(event.key === 'ArrowDown') {
-            car.position.z += 0.1;
+    }
+    e.preventDefault();
+});
+document.addEventListener('keyup', e => keys[e.key] = false);
+
+// ─── PARTICLES ─────────────────────────────────────────────────────────────────
+const tireMarks=[], smokeParts=[];
+function addTireMark(x,z){
+    if(tireMarks.length>600){scene.remove(tireMarks.shift());}
+    const m=new THREE.Mesh(new THREE.PlaneGeometry(0.25,0.7),
+        new THREE.MeshBasicMaterial({color:0x111111,transparent:true,opacity:0.5}));
+    m.rotation.x=-Math.PI/2; m.rotation.z=physics.angle; m.position.set(x,0.015,z);
+    scene.add(m); tireMarks.push(m);
+}
+function addSmoke(){
+    if(smokeParts.length>80){scene.remove(smokeParts.shift());}
+    const s=new THREE.Mesh(new THREE.SphereGeometry(0.15+Math.random()*0.15,6,6),
+        new THREE.MeshBasicMaterial({color:0x888888,transparent:true,opacity:0.3}));
+    s.position.set(physics.x+(Math.random()-.5)*1.5,0.3,physics.z+(Math.random()-.5)*1.5);
+    s.userData={life:1,vx:(Math.random()-.5)*0.02,vy:0.01+Math.random()*0.02};
+    scene.add(s); smokeParts.push(s);
+}
+
+// ─── ALERTS ────────────────────────────────────────────────────────────────────
+let alertTimer=0;
+function showAlert(text, color='#fff'){
+    const el=document.getElementById('drift-combo');
+    el.textContent=text; el.style.color=color; el.style.opacity=1; alertTimer=90;
+}
+
+// ─── MAIN LOOP ─────────────────────────────────────────────────────────────────
+let frame=0;
+function animate(){
+    requestAnimationFrame(animate);
+    frame++;
+
+    physics.update(keys);
+    gameState.update(physics.isDrifting, physics.driftAngle, physics.speed);
+    policeSystem.update(physics.x, physics.z, gameState.wantedLevel);
+
+    // Tire marks & smoke
+    if(physics.isDrifting && Math.abs(physics.speed)>0.05){
+        if(frame%3===0){
+            addTireMark(physics.x-Math.sin(physics.angle)*1.4, physics.z-Math.cos(physics.angle)*1.4);
+            addTireMark(physics.x+Math.sin(physics.angle)*1.4, physics.z+Math.cos(physics.angle)*1.4);
         }
-        if(event.key === 'ArrowLeft') {
-            car.rotation.y += 0.1;
-        }
-        if(event.key === 'ArrowRight') {
-            car.rotation.y -= 0.1;
-        }
+        if(frame%5===0) addSmoke();
+    }
+    smokeParts.forEach((s,i)=>{
+        s.userData.life-=0.03; s.position.x+=s.userData.vx; s.position.y+=s.userData.vy;
+        s.material.opacity=s.userData.life*0.3; s.scale.setScalar(1+(1-s.userData.life)*2);
     });
 
-    animate();
+    // Car mesh
+    carGroup.position.set(physics.x,0,physics.z);
+    carGroup.rotation.y=-physics.angle;
+    wheels.forEach(w=>w.rotation.y+=physics.speed*8);
+
+    // GTA camera
+    const cd=12+Math.abs(physics.speed)*10, ch=6+Math.abs(physics.speed)*3;
+    camera.position.x+=(physics.x-Math.sin(physics.angle)*cd-camera.position.x)*0.08;
+    camera.position.y+=(ch-camera.position.y)*0.08;
+    camera.position.z+=(physics.z-Math.cos(physics.angle)*cd-camera.position.z)*0.08;
+    camera.lookAt(physics.x,1,physics.z);
+
+    // HUD
+    document.getElementById('speed-value').textContent=physics.getSpeedKmh();
+    document.getElementById('drift-bar').style.width=(physics.driftAmount*100)+'%';
+    document.getElementById('drift-score').textContent='+'+Math.floor(gameState.driftScore);
+    document.getElementById('score-val').textContent=gameState.score;
+    document.getElementById('multiplier').textContent=gameState.multiplier>1?'x'+gameState.multiplier:'';
+    for(let i=1;i<=5;i++) document.getElementById('s'+i).className='star'+(i<=gameState.wantedLevel?' lit':'');
+    if(alertTimer>0){alertTimer--;if(alertTimer===0)document.getElementById('drift-combo').style.opacity=0;}
+
+    // Mission progress bar
+    if(gameState.activeMission && !gameState.activeMission.completed){
+        document.getElementById('mission-progress-bar').style.width=(gameState.activeMission.progress*100)+'%';
+    }
+
+    renderer.render(scene,camera);
+}
+animate();
 </script>
 </body>
 </html>
