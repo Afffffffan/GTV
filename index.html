@@ -245,6 +245,7 @@ body{background:#020208;overflow:hidden;font-family:'Rajdhani',sans-serif;color:
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/bmw-m3.js"></script>
 <script src="js/physics.js"></script>
 <script src="js/game-state.js"></script>
 <script src="js/police-ai.js"></script>
@@ -274,6 +275,12 @@ let selectedCarIndex = 0;
 
 // ── CAR BUILDER ────────────────────────────────
 function buildCar(def) {
+  // Use detailed BMW M3 model for bmw
+  if(def.id === 'bmw') {
+    const bmw = buildBMWM3(def.color);
+    bmw.userData.carDef = def;
+    return bmw;
+  }
   const g = new THREE.Group();
   const M = c => new THREE.MeshLambertMaterial({color:c});
 
@@ -651,3 +658,4 @@ window.addEventListener('load',()=>{
 </script>
 </body>
 </html>
+
